@@ -1,0 +1,55 @@
+DE CARTEGIE V1 — SOURCE (50 colonnes)
+
+IdBase
+IdUser
+Adresse EMail
+email sha 256
+Date dernière inscription
+Dernière provenance
+Civilité
+Nom
+Prénom
+Adresse
+Ville
+CP
+Pays
+Date de naissance
+Tel Fixe
+Tel Mobile
+tel_verif
+Dernière ouverture (MARKETING)
+Date Dernier Clic
+statut_immo
+CSP
+RGPD Consentement ouverture
+alcool
+animaux
+association
+assurance
+auto
+banque
+beauté
+bonreduc
+crédit/rac
+defiscalisation/finance
+eshopping
+formation
+hightech
+Immobilier
+isolation
+jardin
+jeuxconcours
+loisirs
+maman
+minceur
+mutuelle
+newsletter
+panel
+sante/beauté
+santé/bien-être
+senior
+travaux
+Voyages
+
+SORTIE : ces 50 colonnes + DATE_CONSENTEMENT_TELEMARKETING en dernière position.
+RÈGLE : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.
