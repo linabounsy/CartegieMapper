@@ -2,34 +2,49 @@ name: Build Windows EXE
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main, master]
-    paths:
-      - "cartegie_cleaner.py"
-      - "requirements.txt"
-      - ".github/workflows/build-windows.yml"
+    inputs:
+      release_tag:
+        description: "Tag de la release GitHub (ex: v1.0.1)"
+        required: true
+        default: "v1.0.1"
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install build dependency
-        run: python -m pip install -r requirements.txt
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
 
-      - name: Build executable
+      - name: Build Cartegie Cleaner
+        shell: pwsh
         run: pyinstaller --onefile --windowed --name Cartegie_Cleaner cartegie_cleaner.py
 
-      - name: Upload Windows executable
+      - name: Upload artifact backup
         uses: actions/upload-artifact@v4
         with:
-          name: Cartegie-Cleaner-Windows
+          name: Cartegie-Cleaner-Windows-${{ inputs.release_tag }}
           path: dist/Cartegie_Cleaner.exe
-          if-no-files-found: error
+
+      - name: Attach EXE to existing GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release view "$env:RELEASE_TAG"
+          gh release upload "$env:RELEASE_TAG" "dist/Cartegie_Cleaner.exe" --clobber
