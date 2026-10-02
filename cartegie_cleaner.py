@@ -14,6 +14,10 @@ def detect_encoding(path):
     try: raw.decode('utf-8'); return 'utf-8'
     except UnicodeDecodeError: return 'latin1'
 
+def norm_header(v):
+    # Compare le DE sans tenir compte de la casse ni des espaces parasites.
+    return ' '.join((v or '').strip().casefold().split())
+
 def norm_phone(v): return re.sub(r'[^0-9+]','',v or '')
 def valid_phone(v):
     if not v.strip(): return True
@@ -39,8 +43,11 @@ def process(src, out, logq):
         r=csv.reader(fi)
         try: header=next(r)
         except StopIteration: raise ValueError('Le fichier est vide.')
-        if header != EXPECTED:
-            missing=[x for x in EXPECTED if x not in header]; extra=[x for x in header if x not in EXPECTED]
+        expected_norm=[norm_header(x) for x in EXPECTED]
+        header_norm=[norm_header(x) for x in header]
+        if header_norm != expected_norm:
+            missing=[EXPECTED[i] for i,x in enumerate(expected_norm) if x not in header_norm]
+            extra=[header[i] for i,x in enumerate(header_norm) if x not in expected_norm]
             raise ValueError(f'DE non conforme. Colonnes lues: {len(header)} au lieu de 50. Manquantes: {missing or "aucune"}. Supplémentaires: {extra or "aucune"}.')
         with open(out,'w',encoding=enc,newline='') as fo:
             w=csv.writer(fo, quoting=csv.QUOTE_MINIMAL)
@@ -76,7 +83,7 @@ def process(src, out, logq):
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title('Cartegie Cleaner v1.0'); self.geometry('760x520'); self.minsize(700,480)
+        super().__init__(); self.title('Cartegie Cleaner v1.0.1'); self.geometry('760x520'); self.minsize(700,480)
         self.q=queue.Queue(); self.src=tk.StringVar(); self.status=tk.StringVar(value='Sélectionne un export Mindbaz Cartegie.')
         ttk.Label(self,text='Cartegie Cleaner',font=('Segoe UI',20,'bold')).pack(pady=(20,4))
         ttk.Label(self,text='DE Cartegie figé • contrôles classiques • gros fichiers en streaming').pack()

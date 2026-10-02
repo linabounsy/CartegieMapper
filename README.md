@@ -41,3 +41,11 @@ L'outil crée également :
 Dépose tout ce projet dans un nouveau repository GitHub. Ensuite ouvre **Actions** et lance le workflow **Build Windows EXE** avec **Run workflow**. L'EXE sera disponible dans les **Artifacts** du workflow sous le nom `Cartegie-Cleaner-Windows`.
 
 À chaque push sur `main`, GitHub reconstruit également l'exécutable.
+
+## Release Windows (v1.0.1+)
+
+Le workflow `.github/workflows/release-windows.yml` compile l'EXE et crée directement une Release GitHub.
+Dans GitHub : **Actions > Release Windows EXE > Run workflow**, saisir par exemple `v1.0.1`, puis lancer. L'EXE sera joint à la Release.
+
+### Correctif v1.0.1
+Le contrôle du dessin d'enregistrement ignore désormais les différences de casse et les espaces parasites dans les intitulés de colonnes (par exemple `crédit/RAC` vs `crédit/rac`, `Santé/Beauté` vs `sante/beauté` uniquement pour la casse ; les accents restent significatifs). L'ordre et les 50 colonnes attendues restent contrôlés.
