@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 EXPECTED = ['IdBase','IdUser','Adresse EMail','email sha 256','Date dernière inscription','Dernière provenance','Civilité','Nom','Prénom','Adresse','Ville','CP','Pays','Date de naissance','Tel Fixe','Tel Mobile','tel_verif','Dernière ouverture (MARKETING)','Date Dernier Clic','statut_immo','CSP','RGPD Consentement ouverture','alcool','animaux','association','assurance','auto','banque','beauté','bonreduc','crédit/rac','defiscalisation/finance','eshopping','formation','hightech','Immobilier','isolation','jardin','jeuxconcours','loisirs','maman','minceur','mutuelle','newsletter','panel','sante/beauté','santé/bien-être','senior','travaux','Voyages']
 NEWCOL = 'DATE_CONSENTEMENT_TELEMARKETING'
@@ -56,6 +56,20 @@ def clean_cp(v):
         return '0' + x, 'ZERO_AJOUTE'
     return v, None
 
+def norm_city(v):
+    """Normalise une ville pour comparaison interne (accents/casse/espaces)."""
+    s = unicodedata.normalize("NFKD", (v or "").strip())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[^A-Za-z0-9]+", " ", s).strip().casefold()
+    return " ".join(s.split())
+
+def cp_00_candidate(v):
+    """00750 -> 75000, 00130 -> 13000. Ne propose rien hors motif 00xxx."""
+    x = (v or "").strip()
+    if re.fullmatch(r"00\d{3}", x):
+        return x[2:] + "00"
+    return None
+
 def valid_cp(v):
     if not (v or '').strip():
         return True
@@ -84,7 +98,8 @@ def clean_phone_fr(v):
        (compact.startswith('00') and not compact.startswith('0033')) or \
        (len(re.sub(r'\D', '', compact)) > 10 and not compact.startswith('0')):
         return '', 'INTERNATIONAL_VIDE'
-    return v, None
+    # Le fichier est France uniquement : tout numéro restant qui n'est pas un 0XXXXXXXXX valide est vidé.
+    return '', 'INVALIDE_VIDE'
 
 def valid_date(v):
     if not (v or '').strip():
@@ -148,6 +163,30 @@ def repair_extra_columns(row):
 
 def process(src, out, logq):
     enc = detect_encoding(src)
+
+    # Passe 1 : construit une référence Ville -> CP valides à partir du fichier lui-même.
+    # Elle permet de corriger un 00xxx uniquement si le CP candidat existe déjà pour cette ville.
+    city_cps = {}
+    with open(src, 'r', encoding=enc, newline='') as fref:
+        rref = csv.reader(fref)
+        try:
+            href = next(rref)
+        except StopIteration:
+            raise ValueError('Le fichier est vide.')
+        if [norm_header(x) for x in href] != EXPECTED_NORM:
+            raise ValueError('DE Cartegie non conforme.')
+        for nref, raw in enumerate(rref, start=1):
+            rr, _ = repair_extra_columns(raw)
+            if rr is None:
+                continue
+            city = norm_city(rr[10])
+            cp0, _ = clean_cp(clean_value(rr[11]))
+            cp = (cp0 or '').strip().upper()
+            if city and valid_cp(cp):
+                city_cps.setdefault(city, set()).add(cp)
+            if nref % 100000 == 0:
+                logq.put(('phase1', nref))
+
     counts = {
         'lignes_lues': 0,
         'lignes_exportees': 0,
@@ -156,8 +195,11 @@ def process(src, out, logq):
         'valeurs_parasites_videes': 0,
         'cp_nan_vides': 0,
         'cp_4_chiffres_corriges': 0,
+        'cp_00_corriges_ville_confirmee': 0,
+        'cp_00_vides_sans_correspondance_ville': 0,
         'telephones_internationaux_vides': 0,
         'telephones_fr_normalises': 0,
+        'telephones_invalides_vides': 0,
         'emails_invalides': 0,
         'cp_invalides_non_vides': 0,
         'tel_fixe_invalides_non_vides': 0,
@@ -237,7 +279,22 @@ def process(src, out, logq):
                 aw.writerow([source_line, 'CP_4_CHIFFRES_CORRIGE', header[11], f'{row[11]} -> {new_cp}'])
             row[11] = new_cp
 
-            # Téléphones : conservation France, normalisation +33/0033, vidage des internationaux hors France.
+            # CP 00xxx : correction uniquement si la ville confirme le CP candidat dans les CP valides du fichier.
+            cand = cp_00_candidate(row[11])
+            if cand:
+                city_key = norm_city(row[10])
+                if city_key and cand in city_cps.get(city_key, set()):
+                    old_cp = row[11]
+                    row[11] = cand
+                    counts['cp_00_corriges_ville_confirmee'] += 1
+                    aw.writerow([source_line, 'CP_00_CORRIGE_VILLE_CONFIRMEE', header[11], f'{old_cp} -> {cand} | Ville={row[10]}'])
+                else:
+                    old_cp = row[11]
+                    row[11] = ''
+                    counts['cp_00_vides_sans_correspondance_ville'] += 1
+                    aw.writerow([source_line, 'CP_00_VIDE_SANS_CORRESPONDANCE_VILLE', header[11], f'{old_cp} -> VIDE | Ville={row[10]} | candidat={cand}'])
+
+            # Téléphones : conservation France, normalisation +33/0033, vidage des internationaux et invalides.
             for idx in (14, 15):
                 old_phone = row[idx]
                 new_phone, phone_action = clean_phone_fr(old_phone)
@@ -246,6 +303,9 @@ def process(src, out, logq):
                     aw.writerow([source_line, 'TEL_INTERNATIONAL_VIDE', header[idx], old_phone])
                 elif phone_action == 'FR_NORMALISE':
                     counts['telephones_fr_normalises'] += 1
+                elif phone_action == 'INVALIDE_VIDE':
+                    counts['telephones_invalides_vides'] += 1
+                    aw.writerow([source_line, 'TEL_INVALIDE_VIDE', header[idx], old_phone])
                 row[idx] = new_phone
 
             email = row[2].strip()
@@ -289,8 +349,8 @@ def process(src, out, logq):
         f.write('Règle : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n')
         f.write('Aucun filtre selon ancienneté télémarketing.\n')
         f.write('#VALEUR! / #VALUE! et erreurs Excel équivalentes : remplacées par vide.\n')
-        f.write('CP : nan -> vide ; 4 chiffres -> ajout d’un 0 devant ; 97xxx/98xxx acceptés.\n')
-        f.write('Téléphones : numéros internationaux hors France vidés ; +33/0033 français normalisés en 0XXXXXXXXX.\n')
+        f.write('CP : nan -> vide ; 4 chiffres -> ajout d’un 0 devant ; 97xxx/98xxx acceptés ; 00xxx corrigé si la ville confirme le CP candidat ; sinon CP vidé.\n')
+        f.write('Téléphones : numéros internationaux et formats invalides vidés ; +33/0033 français normalisés en 0XXXXXXXXX.\n')
         f.write('Lignes avec colonnes excédentaires : réparation prudente si cohérence vérifiable ; sinon rejet tracé.\n\n')
         for k, v in counts.items():
             f.write(f'{k.replace("_"," ").capitalize()} : {v:,}\n'.replace(',',' '))
@@ -323,14 +383,14 @@ class App(tk.Tk):
         self.pb = ttk.Progressbar(self, mode='indeterminate', length=650)
         self.pb.pack(pady=5)
 
-        box = ttk.LabelFrame(self, text='Règles V1.0.3', padding=14)
+        box = ttk.LabelFrame(self, text='Règles V1.0.4', padding=14)
         box.pack(fill='both', expand=True, padx=20, pady=10)
         rules = (
             '• DE source Cartegie : 50 colonnes, comparaison tolérante à la casse et aux espaces.\n'
             '• Ajout : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n'
             '• Aucun filtre d’ancienneté télémarketing.\n'
-            '• CP : nan devient vide ; 4 chiffres = ajout d’un 0 devant ; 97xxx/98xxx acceptés.\n'
-            '• Téléphones internationaux hors France : cellule vidée ; +33/0033 français normalisés.\n'
+            '• CP : nan vide ; 4 chiffres = 0 devant ; 97xxx/98xxx acceptés ; 00xxx corrigé si la ville confirme le CP candidat ; sinon vidé.\n'
+            '• Téléphones internationaux ou invalides : cellule vidée ; +33/0033 français normalisés.\n'
             '• #VALEUR! / #VALUE! et erreurs Excel équivalentes sont vidées.\n'
             '• Les décalages dus à des virgules/guillemets parasites sont réparés seulement si la cohérence est vérifiable.\n'
             '• Les lignes impossibles à reconstruire sont isolées dans REJETS_STRUCTURE, jamais perdues silencieusement.\n'
@@ -372,8 +432,10 @@ class App(tk.Tk):
         try:
             while True:
                 m = self.q.get_nowait()
-                if m[0] == 'progress':
-                    self.status.set(f'Traitement en cours… {m[1]:,} lignes lues'.replace(',',' '))
+                if m[0] == 'phase1':
+                    self.status.set(f'Passe 1/2 : apprentissage Ville/CP… {m[1]:,} lignes lues'.replace(',',' '))
+                elif m[0] == 'progress':
+                    self.status.set(f'Passe 2/2 : traitement… {m[1]:,} lignes lues'.replace(',',' '))
                 elif m[0] == 'done':
                     self.pb.stop()
                     self.go.config(state='normal')
