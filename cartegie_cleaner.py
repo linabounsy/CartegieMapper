@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 EXPECTED = ['IdBase','IdUser','Adresse EMail','email sha 256','Date dernière inscription','Dernière provenance','Civilité','Nom','Prénom','Adresse','Ville','CP','Pays','Date de naissance','Tel Fixe','Tel Mobile','tel_verif','Dernière ouverture (MARKETING)','Date Dernier Clic','statut_immo','CSP','RGPD Consentement ouverture','alcool','animaux','association','assurance','auto','banque','beauté','bonreduc','crédit/rac','defiscalisation/finance','eshopping','formation','hightech','Immobilier','isolation','jardin','jeuxconcours','loisirs','maman','minceur','mutuelle','newsletter','panel','sante/beauté','santé/bien-être','senior','travaux','Voyages']
 NEWCOL = 'DATE_CONSENTEMENT_TELEMARKETING'
@@ -47,11 +47,44 @@ def valid_phone(v):
         x = '0' + x[3:]
     return bool(re.fullmatch(r'0[1-9]\d{8}', x))
 
+def clean_cp(v):
+    """Nettoie le CP sans inventer de valeur : nan -> vide ; 4 chiffres -> zéro devant."""
+    x = (v or '').strip()
+    if not x or x.casefold() == 'nan':
+        return '', 'VIDE_NAN' if x else None
+    if re.fullmatch(r'\d{4}', x):
+        return '0' + x, 'ZERO_AJOUTE'
+    return v, None
+
 def valid_cp(v):
     if not (v or '').strip():
         return True
     x = v.strip().upper()
-    return bool(re.fullmatch(r'(?:0[1-9]|[1-8]\d|9[0-5]|2[AB])\d{3}', x))
+    # Métropole + Corse + DOM/COM (97xxx / 98xxx).
+    return bool(re.fullmatch(r'(?:0[1-9]|[1-8]\d|9[0-8]|2[AB])\d{3}', x))
+
+def clean_phone_fr(v):
+    """Normalise les numéros français ; vide les formats manifestement internationaux hors France."""
+    raw = (v or '').strip()
+    if not raw:
+        return v, None
+    compact = re.sub(r'[^0-9+]', '', raw)
+    if compact.startswith('+33'):
+        candidate = '0' + compact[3:]
+        if re.fullmatch(r'0[1-9]\d{8}', candidate):
+            return candidate, 'FR_NORMALISE' if candidate != raw else None
+    if compact.startswith('0033'):
+        candidate = '0' + compact[4:]
+        if re.fullmatch(r'0[1-9]\d{8}', candidate):
+            return candidate, 'FR_NORMALISE' if candidate != raw else None
+    if re.fullmatch(r'0[1-9]\d{8}', compact):
+        return compact, 'FR_NORMALISE' if compact != raw else None
+    # Hors France explicite (+XX / 00XX), ou numéro long sans 0 initial (ex. 31..., 32..., 61...).
+    if (compact.startswith('+') and not compact.startswith('+33')) or \
+       (compact.startswith('00') and not compact.startswith('0033')) or \
+       (len(re.sub(r'\D', '', compact)) > 10 and not compact.startswith('0')):
+        return '', 'INTERNATIONAL_VIDE'
+    return v, None
 
 def valid_date(v):
     if not (v or '').strip():
@@ -121,6 +154,10 @@ def process(src, out, logq):
         'lignes_reparees_structure': 0,
         'lignes_rejetees_structure': 0,
         'valeurs_parasites_videes': 0,
+        'cp_nan_vides': 0,
+        'cp_4_chiffres_corriges': 0,
+        'telephones_internationaux_vides': 0,
+        'telephones_fr_normalises': 0,
         'emails_invalides': 0,
         'cp_invalides_non_vides': 0,
         'tel_fixe_invalides_non_vides': 0,
@@ -190,6 +227,27 @@ def process(src, out, logq):
                 cleaned.append(nv)
             row = cleaned
 
+            # CP : nan -> vide ; 4 chiffres -> ajout d'un zéro devant.
+            new_cp, cp_action = clean_cp(row[11])
+            if cp_action == 'VIDE_NAN':
+                counts['cp_nan_vides'] += 1
+                aw.writerow([source_line, 'CP_NAN_VIDE', header[11], row[11]])
+            elif cp_action == 'ZERO_AJOUTE':
+                counts['cp_4_chiffres_corriges'] += 1
+                aw.writerow([source_line, 'CP_4_CHIFFRES_CORRIGE', header[11], f'{row[11]} -> {new_cp}'])
+            row[11] = new_cp
+
+            # Téléphones : conservation France, normalisation +33/0033, vidage des internationaux hors France.
+            for idx in (14, 15):
+                old_phone = row[idx]
+                new_phone, phone_action = clean_phone_fr(old_phone)
+                if phone_action == 'INTERNATIONAL_VIDE':
+                    counts['telephones_internationaux_vides'] += 1
+                    aw.writerow([source_line, 'TEL_INTERNATIONAL_VIDE', header[idx], old_phone])
+                elif phone_action == 'FR_NORMALISE':
+                    counts['telephones_fr_normalises'] += 1
+                row[idx] = new_phone
+
             email = row[2].strip()
             cp = row[11].strip()
             fixe = row[14].strip()
@@ -231,6 +289,8 @@ def process(src, out, logq):
         f.write('Règle : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n')
         f.write('Aucun filtre selon ancienneté télémarketing.\n')
         f.write('#VALEUR! / #VALUE! et erreurs Excel équivalentes : remplacées par vide.\n')
+        f.write('CP : nan -> vide ; 4 chiffres -> ajout d’un 0 devant ; 97xxx/98xxx acceptés.\n')
+        f.write('Téléphones : numéros internationaux hors France vidés ; +33/0033 français normalisés en 0XXXXXXXXX.\n')
         f.write('Lignes avec colonnes excédentaires : réparation prudente si cohérence vérifiable ; sinon rejet tracé.\n\n')
         for k, v in counts.items():
             f.write(f'{k.replace("_"," ").capitalize()} : {v:,}\n'.replace(',',' '))
@@ -263,12 +323,14 @@ class App(tk.Tk):
         self.pb = ttk.Progressbar(self, mode='indeterminate', length=650)
         self.pb.pack(pady=5)
 
-        box = ttk.LabelFrame(self, text='Règles V1.0.2', padding=14)
+        box = ttk.LabelFrame(self, text='Règles V1.0.3', padding=14)
         box.pack(fill='both', expand=True, padx=20, pady=10)
         rules = (
             '• DE source Cartegie : 50 colonnes, comparaison tolérante à la casse et aux espaces.\n'
             '• Ajout : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n'
-            '• Aucun filtre d’ancienneté et aucune suppression automatique des téléphones.\n'
+            '• Aucun filtre d’ancienneté télémarketing.\n'
+            '• CP : nan devient vide ; 4 chiffres = ajout d’un 0 devant ; 97xxx/98xxx acceptés.\n'
+            '• Téléphones internationaux hors France : cellule vidée ; +33/0033 français normalisés.\n'
             '• #VALEUR! / #VALUE! et erreurs Excel équivalentes sont vidées.\n'
             '• Les décalages dus à des virgules/guillemets parasites sont réparés seulement si la cohérence est vérifiable.\n'
             '• Les lignes impossibles à reconstruire sont isolées dans REJETS_STRUCTURE, jamais perdues silencieusement.\n'
