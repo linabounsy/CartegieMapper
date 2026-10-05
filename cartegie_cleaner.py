@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 
 EXPECTED = ['IdBase','IdUser','Adresse EMail','email sha 256','Date dernière inscription','Dernière provenance','Civilité','Nom','Prénom','Adresse','Ville','CP','Pays','Date de naissance','Tel Fixe','Tel Mobile','tel_verif','Dernière ouverture (MARKETING)','Date Dernier Clic','statut_immo','CSP','RGPD Consentement ouverture','alcool','animaux','association','assurance','auto','banque','beauté','bonreduc','crédit/rac','defiscalisation/finance','eshopping','formation','hightech','Immobilier','isolation','jardin','jeuxconcours','loisirs','maman','minceur','mutuelle','newsletter','panel','sante/beauté','santé/bien-être','senior','travaux','Voyages']
 NEWCOL = 'DATE_CONSENTEMENT_TELEMARKETING'
@@ -201,7 +201,7 @@ def process(src, out, logq):
         'telephones_fr_normalises': 0,
         'telephones_invalides_vides': 0,
         'emails_invalides': 0,
-        'cp_invalides_non_vides': 0,
+        'cp_invalides_vides': 0,
         'tel_fixe_invalides_non_vides': 0,
         'tel_mobile_invalides_non_vides': 0,
         'dates_inscription_invalides_non_vides': 0,
@@ -318,8 +318,11 @@ def process(src, out, logq):
                 counts['emails_invalides'] += 1
                 aw.writerow([source_line,'EMAIL_INVALIDE',header[2],email])
             if cp and not valid_cp(cp):
-                counts['cp_invalides_non_vides'] += 1
-                aw.writerow([source_line,'CP_INVALIDE',header[11],cp])
+                # Dernier filet de sécurité Cartegie : un CP restant invalide est vidé, jamais inventé.
+                counts['cp_invalides_vides'] += 1
+                aw.writerow([source_line,'CP_INVALIDE_VIDE',header[11],f'{cp} -> VIDE | Ville={row[10]}'])
+                row[11] = ''
+                cp = ''
             if fixe and not valid_phone(fixe):
                 counts['tel_fixe_invalides_non_vides'] += 1
                 aw.writerow([source_line,'TEL_FIXE_INVALIDE',header[14],fixe])
@@ -349,7 +352,7 @@ def process(src, out, logq):
         f.write('Règle : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n')
         f.write('Aucun filtre selon ancienneté télémarketing.\n')
         f.write('#VALEUR! / #VALUE! et erreurs Excel équivalentes : remplacées par vide.\n')
-        f.write('CP : nan -> vide ; 4 chiffres -> ajout d’un 0 devant ; 97xxx/98xxx acceptés ; 00xxx corrigé si la ville confirme le CP candidat ; sinon CP vidé.\n')
+        f.write('CP : nan -> vide ; 4 chiffres -> ajout d’un 0 devant ; 97xxx/98xxx acceptés ; 00xxx corrigé si la ville confirme le CP candidat ; sinon CP vidé ; tout CP restant invalide est vidé.\n')
         f.write('Téléphones : numéros internationaux et formats invalides vidés ; +33/0033 français normalisés en 0XXXXXXXXX.\n')
         f.write('Lignes avec colonnes excédentaires : réparation prudente si cohérence vérifiable ; sinon rejet tracé.\n\n')
         for k, v in counts.items():
@@ -383,13 +386,13 @@ class App(tk.Tk):
         self.pb = ttk.Progressbar(self, mode='indeterminate', length=650)
         self.pb.pack(pady=5)
 
-        box = ttk.LabelFrame(self, text='Règles V1.0.4', padding=14)
+        box = ttk.LabelFrame(self, text='Règles V1.0.5', padding=14)
         box.pack(fill='both', expand=True, padx=20, pady=10)
         rules = (
             '• DE source Cartegie : 50 colonnes, comparaison tolérante à la casse et aux espaces.\n'
             '• Ajout : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n'
             '• Aucun filtre d’ancienneté télémarketing.\n'
-            '• CP : nan vide ; 4 chiffres = 0 devant ; 97xxx/98xxx acceptés ; 00xxx corrigé si la ville confirme le CP candidat ; sinon vidé.\n'
+            '• CP : nan vide ; 4 chiffres = 0 devant ; 97xxx/98xxx acceptés ; 00xxx corrigé si la ville confirme le CP candidat ; sinon vidé ; tout CP restant invalide est vidé.\n'
             '• Téléphones internationaux ou invalides : cellule vidée ; +33/0033 français normalisés.\n'
             '• #VALEUR! / #VALUE! et erreurs Excel équivalentes sont vidées.\n'
             '• Les décalages dus à des virgules/guillemets parasites sont réparés seulement si la cohérence est vérifiable.\n'
