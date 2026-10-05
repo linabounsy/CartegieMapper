@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 
-VERSION = "1.0.6"
+VERSION = "1.0.7"
 
 EXPECTED = ['IdBase','IdUser','Adresse EMail','email sha 256','Date dernière inscription','Dernière provenance','Civilité','Nom','Prénom','Adresse','Ville','CP','Pays','Date de naissance','Tel Fixe','Tel Mobile','tel_verif','Dernière ouverture (MARKETING)','Date Dernier Clic','statut_immo','CSP','RGPD Consentement ouverture','alcool','animaux','association','assurance','auto','banque','beauté','bonreduc','crédit/rac','defiscalisation/finance','eshopping','formation','hightech','Immobilier','isolation','jardin','jeuxconcours','loisirs','maman','minceur','mutuelle','newsletter','panel','sante/beauté','santé/bien-être','senior','travaux','Voyages']
 NEWCOL = 'DATE_CONSENTEMENT_TELEMARKETING'
@@ -29,6 +29,33 @@ def detect_encoding(path):
         return 'utf-8'
     except UnicodeDecodeError:
         return 'latin1'
+
+def detect_delimiter(path, enc):
+    """Détecte le séparateur du CSV à partir de l'entête (virgule, point-virgule ou tabulation)."""
+    with open(path, 'r', encoding=enc, newline='') as f:
+        first_line = f.readline()
+    if not first_line:
+        raise ValueError('Le fichier est vide.')
+
+    candidates = [',', ';', '\t']
+    scored = []
+    for delim in candidates:
+        try:
+            parsed = next(csv.reader([first_line], delimiter=delim))
+        except Exception:
+            continue
+        # Priorité absolue au séparateur qui restitue les 50 colonnes du DE.
+        normalized = [norm_header(x) for x in parsed]
+        exact = (len(parsed) == 50 and normalized == EXPECTED_NORM)
+        scored.append((1 if exact else 0, len(parsed), delim))
+
+    exacts = [x for x in scored if x[0] == 1]
+    if exacts:
+        return exacts[0][2]
+    if scored:
+        # À défaut, prend celui qui produit le plus de colonnes : le contrôle DE détaillé expliquera l'écart.
+        return max(scored, key=lambda x: x[1])[2]
+    return ','
 
 def clean_value(v):
     if v is None:
@@ -131,7 +158,7 @@ def score_row(row):
     if valid_phone(row[15]): score += 2
     return score
 
-def repair_extra_columns(row):
+def repair_extra_columns(row, delimiter=","):
     """
     Les exports Mindbaz peuvent contenir des virgules/guillemets parasites,
     principalement dans les champs texte. On ne décale jamais arbitrairement
@@ -150,7 +177,7 @@ def repair_extra_columns(row):
         end = idx + excess + 1
         if end > len(row):
             continue
-        candidate = row[:idx] + [",".join(row[idx:end])] + row[end:]
+        candidate = row[:idx] + [delimiter.join(row[idx:end])] + row[end:]
         if len(candidate) == 50:
             candidates.append((score_row(candidate), idx, candidate))
 
@@ -165,12 +192,13 @@ def repair_extra_columns(row):
 
 def process(src, out, logq):
     enc = detect_encoding(src)
+    delimiter = detect_delimiter(src, enc)
 
     # Passe 1 : construit une référence Ville -> CP valides à partir du fichier lui-même.
     # Elle permet de corriger un 00xxx uniquement si le CP candidat existe déjà pour cette ville.
     city_cps = {}
     with open(src, 'r', encoding=enc, newline='') as fref:
-        rref = csv.reader(fref)
+        rref = csv.reader(fref, delimiter=delimiter)
         try:
             href = next(rref)
         except StopIteration:
@@ -188,7 +216,7 @@ def process(src, out, logq):
                 '\n'.join(details[:12])
             )
         for nref, raw in enumerate(rref, start=1):
-            rr, _ = repair_extra_columns(raw)
+            rr, _ = repair_extra_columns(raw, delimiter)
             if rr is None:
                 continue
             city = norm_city(rr[10])
@@ -229,7 +257,7 @@ def process(src, out, logq):
          open(anomaly_file, 'w', encoding='utf-8-sig', newline='') as fa, \
          open(reject_file, 'w', encoding='utf-8-sig', newline='') as fr:
 
-        reader = csv.reader(fi)
+        reader = csv.reader(fi, delimiter=delimiter)
         try:
             header = next(reader)
         except StopIteration:
@@ -248,7 +276,7 @@ def process(src, out, logq):
                 '\n'.join(details[:12])
             )
 
-        writer = csv.writer(fo, quoting=csv.QUOTE_MINIMAL)
+        writer = csv.writer(fo, delimiter=delimiter, quoting=csv.QUOTE_MINIMAL)
         aw = csv.writer(fa, delimiter=';')
         rw = csv.writer(fr, delimiter=';')
         writer.writerow(header + [NEWCOL])
@@ -258,7 +286,7 @@ def process(src, out, logq):
         for source_line, raw_row in enumerate(reader, start=2):
             counts['lignes_lues'] += 1
 
-            row, repaired_field = repair_extra_columns(raw_row)
+            row, repaired_field = repair_extra_columns(raw_row, delimiter)
             if row is None:
                 counts['lignes_rejetees_structure'] += 1
                 rw.writerow([source_line, len(raw_row), repr(raw_row)])
@@ -359,7 +387,8 @@ def process(src, out, logq):
         f.write('=' * 50 + '\n')
         f.write(f'Fichier source : {src}\n')
         f.write(f'Fichier produit : {out}\n')
-        f.write(f'Encodage : {enc}\n\n')
+        f.write(f'Encodage : {enc}\n')
+        f.write(f'Séparateur détecté : {repr(delimiter)}\n\n')
         f.write('DE : 50 colonnes Cartegie + DATE_CONSENTEMENT_TELEMARKETING en dernière colonne.\n')
         f.write('Règle : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n')
         f.write('Aucun filtre selon ancienneté télémarketing.\n')
@@ -398,10 +427,10 @@ class App(tk.Tk):
         self.pb = ttk.Progressbar(self, mode='indeterminate', length=650)
         self.pb.pack(pady=5)
 
-        box = ttk.LabelFrame(self, text='Règles V1.0.5', padding=14)
+        box = ttk.LabelFrame(self, text=f'Règles V{VERSION}', padding=14)
         box.pack(fill='both', expand=True, padx=20, pady=10)
         rules = (
-            '• DE source Cartegie : 50 colonnes, comparaison tolérante à la casse et aux espaces.\n'
+            '• DE source Cartegie : 50 colonnes ; séparateur , / ; / tabulation détecté automatiquement ; comparaison tolérante à la casse, aux accents et aux espaces.\n'
             '• Ajout : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n'
             '• Aucun filtre d’ancienneté télémarketing.\n'
             '• CP : nan vide ; 4 chiffres = 0 devant ; 97xxx/98xxx acceptés ; 00xxx corrigé si la ville confirme le CP candidat ; sinon vidé ; tout CP restant invalide est vidé.\n'
