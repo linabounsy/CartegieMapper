@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 
 EXPECTED = ['IdBase','IdUser','Adresse EMail','email sha 256','Date dernière inscription','Dernière provenance','Civilité','Nom','Prénom','Adresse','Ville','CP','Pays','Date de naissance','Tel Fixe','Tel Mobile','tel_verif','Dernière ouverture (MARKETING)','Date Dernier Clic','statut_immo','CSP','RGPD Consentement ouverture','alcool','animaux','association','assurance','auto','banque','beauté','bonreduc','crédit/rac','defiscalisation/finance','eshopping','formation','hightech','Immobilier','isolation','jardin','jeuxconcours','loisirs','maman','minceur','mutuelle','newsletter','panel','sante/beauté','santé/bien-être','senior','travaux','Voyages']
 NEWCOL = 'DATE_CONSENTEMENT_TELEMARKETING'
@@ -12,7 +12,9 @@ EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
 PARASITES = {"#VALEUR!", "#VALUE!", "#N/A", "#N/A!", "#REF!", "#NOM?", "#NAME?"}
 
 def norm_header(s):
-    s = unicodedata.normalize("NFKC", (s or "").strip())
+    """Compare les entêtes sans tenir compte de la casse, des accents ni des espaces parasites."""
+    s = unicodedata.normalize("NFKD", (s or "").strip())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
     return " ".join(s.casefold().split())
 
 EXPECTED_NORM = [norm_header(x) for x in EXPECTED]
@@ -174,7 +176,17 @@ def process(src, out, logq):
         except StopIteration:
             raise ValueError('Le fichier est vide.')
         if [norm_header(x) for x in href] != EXPECTED_NORM:
-            raise ValueError('DE Cartegie non conforme.')
+            details = []
+            for i in range(max(len(href), 50)):
+                got = href[i] if i < len(href) else '<MANQUANT>'
+                exp = EXPECTED[i] if i < 50 else '<EN TROP>'
+                if i >= len(href) or i >= 50 or norm_header(got) != norm_header(exp):
+                    details.append(f'colonne {i+1}: attendu "{exp}" / reçu "{got}"')
+            raise ValueError(
+                'DE Cartegie non conforme.\n'
+                f'Colonnes lues : {len(href)} / attendu : 50.\n' +
+                '\n'.join(details[:12])
+            )
         for nref, raw in enumerate(rref, start=1):
             rr, _ = repair_extra_columns(raw)
             if rr is None:
