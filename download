@@ -1,9 +1,4 @@
 __pycache__/
-*.py[cod]
 build/
 dist/
 *.spec
-*.csv
-!tests/*.csv
-*.txt
-!.github/**

@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 
 EXPECTED = ['IdBase','IdUser','Adresse EMail','email sha 256','Date dernière inscription','Dernière provenance','Civilité','Nom','Prénom','Adresse','Ville','CP','Pays','Date de naissance','Tel Fixe','Tel Mobile','tel_verif','Dernière ouverture (MARKETING)','Date Dernier Clic','statut_immo','CSP','RGPD Consentement ouverture','alcool','animaux','association','assurance','auto','banque','beauté','bonreduc','crédit/rac','defiscalisation/finance','eshopping','formation','hightech','Immobilier','isolation','jardin','jeuxconcours','loisirs','maman','minceur','mutuelle','newsletter','panel','sante/beauté','santé/bien-être','senior','travaux','Voyages']
 NEWCOL = 'DATE_CONSENTEMENT_TELEMARKETING'
@@ -56,6 +56,44 @@ def detect_delimiter(path, enc):
         # À défaut, prend celui qui produit le plus de colonnes : le contrôle DE détaillé expliquera l'écart.
         return max(scored, key=lambda x: x[1])[2]
     return ','
+
+def source_mapping(header):
+    """Accepte le DE standard ou Lesmalices avec une colonne santé supplémentaire."""
+    normalized = [norm_header(h) for h in header]
+    if normalized == EXPECTED_NORM:
+        return False
+    # Dans Lesmalices, deux champs santé se suivent ; le second est prioritaire.
+    if len(header) == 51 and normalized[:45] == EXPECTED_NORM[:45] and normalized[45] == norm_header("sante/beaute") and normalized[46:] == EXPECTED_NORM[45:]:
+        return True
+    details = []
+    for i in range(max(len(header), 50)):
+        got = header[i] if i < len(header) else "<MANQUANT>"
+        exp = EXPECTED[i] if i < 50 else "<EN TROP>"
+        if i >= len(header) or i >= 50 or norm_header(got) != norm_header(exp):
+            details.append(f'colonne {i+1}: attendu "{exp}" / reçu "{got}"')
+    raise ValueError("DE Cartegie non conforme.\\n" + f"Colonnes lues : {len(header)} / attendu : 50 (ou Lesmalices 51).\\n" + "\\n".join(details[:12]))
+
+def project_row(raw, delimiter, lesmalices):
+    if lesmalices and len(raw) == 51:
+        # Index 45 = sante/beaute (secondaire), 46 = sante/beauté (principal)
+        primary = raw[46]
+        secondary = raw[45]
+        fallback = bool(not primary.strip() and secondary.strip())
+        conflict = bool(primary.strip() and secondary.strip() and primary.strip() != secondary.strip())
+        result = raw[:45] + [primary if primary.strip() else secondary] + raw[47:]
+        return result, None, fallback, conflict
+    row, repaired = repair_extra_columns(raw, delimiter)
+    return row, repaired, False, False
+
+def normalize_date(v):
+    if not (v or "").strip():
+        return v
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(v.strip(), fmt).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    return v
 
 def clean_value(v):
     if v is None:
@@ -203,20 +241,9 @@ def process(src, out, logq):
             href = next(rref)
         except StopIteration:
             raise ValueError('Le fichier est vide.')
-        if [norm_header(x) for x in href] != EXPECTED_NORM:
-            details = []
-            for i in range(max(len(href), 50)):
-                got = href[i] if i < len(href) else '<MANQUANT>'
-                exp = EXPECTED[i] if i < 50 else '<EN TROP>'
-                if i >= len(href) or i >= 50 or norm_header(got) != norm_header(exp):
-                    details.append(f'colonne {i+1}: attendu "{exp}" / reçu "{got}"')
-            raise ValueError(
-                'DE Cartegie non conforme.\n'
-                f'Colonnes lues : {len(href)} / attendu : 50.\n' +
-                '\n'.join(details[:12])
-            )
+        lesmalices = source_mapping(href)
         for nref, raw in enumerate(rref, start=1):
-            rr, _ = repair_extra_columns(raw, delimiter)
+            rr, _, _, _ = project_row(raw, delimiter, lesmalices)
             if rr is None:
                 continue
             city = norm_city(rr[10])
@@ -229,6 +256,8 @@ def process(src, out, logq):
 
     counts = {
         'lignes_lues': 0,
+        'sante_repli_secondaire': 0,
+        'sante_conflits_signales': 0,
         'lignes_exportees': 0,
         'lignes_reparees_structure': 0,
         'lignes_rejetees_structure': 0,
@@ -263,36 +292,33 @@ def process(src, out, logq):
         except StopIteration:
             raise ValueError('Le fichier est vide.')
 
-        if [norm_header(x) for x in header] != EXPECTED_NORM:
-            details = []
-            for i in range(max(len(header), 50)):
-                got = header[i] if i < len(header) else '<MANQUANT>'
-                exp = EXPECTED[i] if i < 50 else '<EN TROP>'
-                if i >= len(header) or i >= 50 or norm_header(got) != norm_header(exp):
-                    details.append(f'colonne {i+1}: attendu "{exp}" / reçu "{got}"')
-            raise ValueError(
-                'DE Cartegie non conforme.\n'
-                f'Colonnes lues : {len(header)} / attendu : 50.\n' +
-                '\n'.join(details[:12])
-            )
+        lesmalices = source_mapping(header)
 
-        writer = csv.writer(fo, delimiter=delimiter, quoting=csv.QUOTE_MINIMAL)
+        writer = csv.writer(fo, delimiter=",", quoting=csv.QUOTE_ALL)
         aw = csv.writer(fa, delimiter=';')
         rw = csv.writer(fr, delimiter=';')
-        writer.writerow(header + [NEWCOL])
+        writer.writerow(EXPECTED + [NEWCOL])
         aw.writerow(['LIGNE_SOURCE','TYPE','COLONNE','VALEUR'])
         rw.writerow(['LIGNE_SOURCE','NB_CHAMPS','LIGNE_PARSE'])
 
         for source_line, raw_row in enumerate(reader, start=2):
             counts['lignes_lues'] += 1
 
-            row, repaired_field = repair_extra_columns(raw_row, delimiter)
+            row, repaired_field, fallback, conflict = project_row(raw_row, delimiter, lesmalices)
             if row is None:
                 counts['lignes_rejetees_structure'] += 1
                 rw.writerow([source_line, len(raw_row), repr(raw_row)])
                 if counts['lignes_lues'] % 50000 == 0:
                     logq.put(('progress', counts['lignes_lues']))
                 continue
+
+            if fallback:
+                counts['sante_repli_secondaire'] += 1
+                aw.writerow([source_line, 'SANTE_REPLI_SECONDAIRE', 'sante/beauté', raw_row[45]])
+            if conflict:
+                counts['sante_conflits_signales'] += 1
+                aw.writerow([source_line, 'SANTE_CONFLIT_PRIORITE_PRINCIPALE', 'sante/beauté',
+                             f'principal={raw_row[46]!r}; secondaire={raw_row[45]!r}'])
 
             if repaired_field:
                 counts['lignes_reparees_structure'] += 1
@@ -305,9 +331,12 @@ def process(src, out, logq):
                 nv = clean_value(val)
                 if nv == "" and (val or "").strip().upper() in PARASITES:
                     counts['valeurs_parasites_videes'] += 1
-                    aw.writerow([source_line, 'VALEUR_PARASITE_VIDEE', header[idx], val])
+                    aw.writerow([source_line, 'VALEUR_PARASITE_VIDEE', EXPECTED[idx], val])
                 cleaned.append(nv)
             row = cleaned
+            # Format Cartegie uniforme pour les champs de date du DE.
+            for date_idx in (4, 13, 17, 18):
+                row[date_idx] = normalize_date(row[date_idx])
 
             # CP : nan -> vide ; 4 chiffres -> ajout d'un zéro devant.
             new_cp, cp_action = clean_cp(row[11])
@@ -388,7 +417,8 @@ def process(src, out, logq):
         f.write(f'Fichier source : {src}\n')
         f.write(f'Fichier produit : {out}\n')
         f.write(f'Encodage : {enc}\n')
-        f.write(f'Séparateur détecté : {repr(delimiter)}\n\n')
+        f.write(f'Séparateur source : {repr(delimiter)} ; sortie : virgule et guillemets systématiques\n')
+        f.write(f'Mapping Lesmalices 51 colonnes : {lesmalices}\n\n')
         f.write('DE : 50 colonnes Cartegie + DATE_CONSENTEMENT_TELEMARKETING en dernière colonne.\n')
         f.write('Règle : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n')
         f.write('Aucun filtre selon ancienneté télémarketing.\n')
