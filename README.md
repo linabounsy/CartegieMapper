@@ -1,13 +1,11 @@
-# Cartegie Mapper v1.0.8
+# Cartegie Mapper v1.0.9
 
-- Entrées acceptées : DE standard 50 colonnes (virgule, point-virgule, tabulation) et export Lesmalices 51 colonnes comportant les deux champs `sante/beaute` et `sante/beauté`.
-- Mapping Lesmalices : `sante/beauté` est prioritaire ; si vide, reprend `sante/beaute`. Les conflits entre valeurs renseignées sont tracés dans les anomalies sans fusion silencieuse.
-- Sortie Cartegie **toujours** : 51 colonnes (50 du DE standard + `DATE_CONSENTEMENT_TELEMARKETING`), séparées par virgules, **chaque champ entre guillemets** (y compris champs vides).
-- Dates des champs de date identifiés normalisées au format `AAAA-MM-JJ HH:MM:SS` lorsqu'elles sont reconnues. Les dates non reconnues sont conservées et doivent être vérifiées.
-- Toutes les règles de nettoyage CP/téléphones et de contrôle de structure v1.0.7 conservées.
+Conserve toutes les règles de la v1.0.8, avec correction des numéros français dont le zéro initial a été perdu à l'export.
 
-## Mise à jour GitHub
-Décompresser l'archive et remplacer `cartegie_cleaner.py`, `README.md` et `.github/workflows/build-release.yml` à la racine du dépôt. Dans Actions, lancer le workflow avec `v1.0.8`, puis télécharger l'EXE dans Releases.
+- Un numéro de 9 chiffres commençant par 1 à 9 est converti en numéro français à 10 chiffres en préfixant `0`, puis conservé.
+- Les numéros internationaux hors France et les formats restant invalides sont vidés, sans supprimer de contact.
+- Le rapport inclut le compteur `Telephones zero initial restaure`.
+- Format Cartegie : 51 colonnes, séparateur virgule, guillemets systématiques, dates normalisées.
+- Mapping Lesmalices : `sante/beauté` prioritaire, repli sur `sante/beaute` si vide, conflits tracés.
 
-## Vérifications
-Avant livraison, vérifier le rapport de contrôle et contrôler le CSV produit sur un échantillon représentatif, notamment les dates et les champs adresse contenant des virgules.
+**Contrôle recommandé** : examiner le rapport et un échantillon de téléphones restaurés avant livraison.

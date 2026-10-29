@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Version de la release (ex: v1.0.8)"
+        description: "Version de la release (ex: v1.0.9)"
         required: true
-        default: "v1.0.8"
+        default: "v1.0.9"
 
 permissions:
   contents: write

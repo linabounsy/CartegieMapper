@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 
 EXPECTED = ['IdBase','IdUser','Adresse EMail','email sha 256','Date dernière inscription','Dernière provenance','Civilité','Nom','Prénom','Adresse','Ville','CP','Pays','Date de naissance','Tel Fixe','Tel Mobile','tel_verif','Dernière ouverture (MARKETING)','Date Dernier Clic','statut_immo','CSP','RGPD Consentement ouverture','alcool','animaux','association','assurance','auto','banque','beauté','bonreduc','crédit/rac','defiscalisation/finance','eshopping','formation','hightech','Immobilier','isolation','jardin','jeuxconcours','loisirs','maman','minceur','mutuelle','newsletter','panel','sante/beauté','santé/bien-être','senior','travaux','Voyages']
 NEWCOL = 'DATE_CONSENTEMENT_TELEMARKETING'
@@ -158,6 +158,9 @@ def clean_phone_fr(v):
         candidate = '0' + compact[4:]
         if re.fullmatch(r'0[1-9]\d{8}', candidate):
             return candidate, 'FR_NORMALISE' if candidate != raw else None
+    # Export numérique : zéro initial perdu, uniquement si 9 chiffres commençant par 1-9.
+    if re.fullmatch(r'[1-9]\d{8}', compact):
+        return '0' + compact, 'ZERO_INITIAL_RESTAURE'
     if re.fullmatch(r'0[1-9]\d{8}', compact):
         return compact, 'FR_NORMALISE' if compact != raw else None
     # Hors France explicite (+XX / 00XX), ou numéro long sans 0 initial (ex. 31..., 32..., 61...).
@@ -268,6 +271,7 @@ def process(src, out, logq):
         'cp_00_vides_sans_correspondance_ville': 0,
         'telephones_internationaux_vides': 0,
         'telephones_fr_normalises': 0,
+        'telephones_zero_initial_restaure': 0,
         'telephones_invalides_vides': 0,
         'emails_invalides': 0,
         'cp_invalides_vides': 0,
@@ -370,6 +374,8 @@ def process(src, out, logq):
                 if phone_action == 'INTERNATIONAL_VIDE':
                     counts['telephones_internationaux_vides'] += 1
                     aw.writerow([source_line, 'TEL_INTERNATIONAL_VIDE', header[idx], old_phone])
+                elif phone_action == 'ZERO_INITIAL_RESTAURE':
+                    counts['telephones_zero_initial_restaure'] += 1
                 elif phone_action == 'FR_NORMALISE':
                     counts['telephones_fr_normalises'] += 1
                 elif phone_action == 'INVALIDE_VIDE':
@@ -424,7 +430,7 @@ def process(src, out, logq):
         f.write('Aucun filtre selon ancienneté télémarketing.\n')
         f.write('#VALEUR! / #VALUE! et erreurs Excel équivalentes : remplacées par vide.\n')
         f.write('CP : nan -> vide ; 4 chiffres -> ajout d’un 0 devant ; 97xxx/98xxx acceptés ; 00xxx corrigé si la ville confirme le CP candidat ; sinon CP vidé ; tout CP restant invalide est vidé.\n')
-        f.write('Téléphones : numéros internationaux et formats invalides vidés ; +33/0033 français normalisés en 0XXXXXXXXX.\n')
+        f.write('Téléphones : zéro initial restauré pour les numéros français à 9 chiffres ; internationaux et invalides vidés ; +33/0033 normalisés.\n')
         f.write('Lignes avec colonnes excédentaires : réparation prudente si cohérence vérifiable ; sinon rejet tracé.\n\n')
         for k, v in counts.items():
             f.write(f'{k.replace("_"," ").capitalize()} : {v:,}\n'.replace(',',' '))
@@ -464,7 +470,7 @@ class App(tk.Tk):
             '• Ajout : DATE_CONSENTEMENT_TELEMARKETING = Date dernière inscription.\n'
             '• Aucun filtre d’ancienneté télémarketing.\n'
             '• CP : nan vide ; 4 chiffres = 0 devant ; 97xxx/98xxx acceptés ; 00xxx corrigé si la ville confirme le CP candidat ; sinon vidé ; tout CP restant invalide est vidé.\n'
-            '• Téléphones internationaux ou invalides : cellule vidée ; +33/0033 français normalisés.\n'
+            '• Téléphones français à 9 chiffres : zéro initial restauré ; internationaux/invalides vidés.\n'
             '• #VALEUR! / #VALUE! et erreurs Excel équivalentes sont vidées.\n'
             '• Les décalages dus à des virgules/guillemets parasites sont réparés seulement si la cohérence est vérifiable.\n'
             '• Les lignes impossibles à reconstruire sont isolées dans REJETS_STRUCTURE, jamais perdues silencieusement.\n'
